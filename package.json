@@ -1,0 +1,24 @@
+{
+  "name": "a7-llm-behind-api",
+  "version": "1.0.0",
+  "description": "FlyRank A7 — Put an LLM behind your API (triage endpoint)",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --env-file=.env src/server.js",
+    "dev": "node --env-file=.env --watch src/server.js",
+    "hello": "node --env-file=.env src/llm/hello.js"
+  },
+  "keywords": [
+    "llm",
+    "express",
+    "zod",
+    "openai"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.2.1",
+    "openai": "^7.5.0",
+    "zod": "^4.4.3"
+  }
+}
