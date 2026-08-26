@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { completeTriage } from "../llm/complete.js";
 import {
   STUB_TRIAGE,
   triageInputSchema,
@@ -23,15 +24,26 @@ router.post("/", async (req, res) => {
   const stubOn = process.env.LLM_STUB === "1";
   const enabled = process.env.LLM_ENABLED !== "false";
 
-  // Stage 1: stub only. Real model call comes in Stage 2+.
   if (stubOn || !enabled) {
     const output = triageOutputSchema.parse(STUB_TRIAGE);
     return res.status(200).json(output);
   }
 
-  return res.status(501).json({
-    error: "Live model path not wired yet — set LLM_STUB=1 or continue to Stage 2",
-  });
+  try {
+    const result = await completeTriage(parsed.data.text);
+    // Stage 2: return the model text as-is (parse + schema come in Stage 3).
+    return res.status(200).json({
+      answer: result.answer,
+      prompt_version: result.prompt_version,
+      model: result.model,
+    });
+  } catch (err) {
+    console.error("triage model error:", err?.message ?? err);
+    return res.status(502).json({
+      error: "Model call failed",
+      detail: err?.message ?? "unknown error",
+    });
+  }
 });
 
 export default router;

@@ -55,19 +55,39 @@ curl -i -X POST http://localhost:3000/triage ^
 
 With `LLM_STUB=1` the server returns a hard-coded schema-valid object and makes **zero** model calls.
 
+## Stage 2 — prompt file + live model
+
+Prompt lives in [`prompts/triage-v1.md`](./prompts/triage-v1.md) (role, shape, rules, when-unsure, examples). User text is sent as a **user** message (JSON-encoded), never glued into the system prompt.
+
+1. Put your key in `.env`
+2. Set `LLM_STUB=0` (or remove it)
+3. Restart: `npm start`
+
+```powershell
+Invoke-RestMethod http://localhost:3000/triage -Method POST -ContentType "application/json" -Body '{"text":"I was charged twice for the same invoice"}'
+```
+
+Stage 2 returns `{ answer, prompt_version, model }` — raw model text. Stage 3 will parse + validate against Zod.
+
+**Provider swap:** only `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` change between OpenRouter and Ollama — the rest of the code stays the same.
+
 ## Project layout
 
 ```
 A7/
 ├── JOB-CARD.md
+├── prompts/
+│   └── triage-v1.md      # versioned system prompt
 ├── .env.example
 ├── src/
 │   ├── server.js
 │   ├── routes/triage.js
 │   └── llm/
-│       ├── hello.js      # Stage 0 smoke test
+│       ├── hello.js
 │       ├── client.js
-│       └── schema.js     # Zod input + output
+│       ├── prompt.js     # loads prompts/triage-v1.md
+│       ├── complete.js   # model call
+│       └── schema.js
 └── package.json
 ```
 
