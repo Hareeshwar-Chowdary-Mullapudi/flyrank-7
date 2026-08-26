@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { runTriage } from "../llm/complete.js";
 import {
+  KILL_SWITCH_TRIAGE,
   STUB_TRIAGE,
   triageInputSchema,
   triageOutputSchema,
@@ -21,12 +22,14 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: message, field });
   }
 
-  const stubOn = process.env.LLM_STUB === "1";
-  const enabled = process.env.LLM_ENABLED !== "false";
+  // Kill switch first — production off-switch, zero model calls.
+  if (process.env.LLM_ENABLED === "false") {
+    return res.status(200).json(triageOutputSchema.parse(KILL_SWITCH_TRIAGE));
+  }
 
-  if (stubOn || !enabled) {
-    const output = triageOutputSchema.parse(STUB_TRIAGE);
-    return res.status(200).json(output);
+  // Stub mode for local development without spending quota.
+  if (process.env.LLM_STUB === "1") {
+    return res.status(200).json(triageOutputSchema.parse(STUB_TRIAGE));
   }
 
   try {
@@ -38,6 +41,21 @@ router.post("/", async (req, res) => {
         error: "Could not produce valid triage JSON",
         detail: err.message,
         prompt_version: err.meta?.prompt_version,
+      });
+    }
+
+    if (err.status === 504 || err.name === "APIConnectionTimeoutError") {
+      return res.status(504).json({
+        error: "Model timed out",
+        detail: err.message,
+      });
+    }
+
+    const status = err?.status ?? err?.statusCode;
+    if (status === 401 || status === 403) {
+      return res.status(502).json({
+        error: "LLM auth failed — check LLM_API_KEY (not retried)",
+        detail: err.message,
       });
     }
 

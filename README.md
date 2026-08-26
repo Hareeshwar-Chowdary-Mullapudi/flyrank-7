@@ -91,6 +91,22 @@ Happy path returns only schema-shaped JSON:
 }
 ```
 
+## Stage 4 — production hardening
+
+| Control | Setting |
+|---------|---------|
+| Timeout | Client `timeout: 30000` → HTTP **504** on slow model |
+| SDK retries | **Off** (`maxRetries: 0`) — we retry ourselves |
+| Our retries | Timeouts / `429` / `5xx` only, backoff 1s→2s→4s + jitter; never `400`/`401`/`403` |
+| Cost log | One JSON line per call on stdout (`type: "llm_call"`, tokens, duration, repairs) |
+| Kill switch | `LLM_ENABLED=false` → immediate schema fallback, **zero** model calls |
+
+```powershell
+# Kill switch check
+$env:LLM_ENABLED="false"; npm start
+# POST /triage → fallback JSON, no llm_call logs
+```
+
 ## Project layout
 
 ```

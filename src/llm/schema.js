@@ -15,10 +15,18 @@ export const triageOutputSchema = z.object({
   reason: z.string().min(1).max(300),
 });
 
-/** Deterministic fallback used by LLM_STUB=1 and LLM_ENABLED=false */
+/** Deterministic fallback used by LLM_STUB=1 */
 export const STUB_TRIAGE = {
   category: "other",
   urgency: "normal",
   confidence: 0.5,
   reason: "Stub mode — no model call was made.",
+};
+
+/** Kill-switch fallback when LLM_ENABLED=false */
+export const KILL_SWITCH_TRIAGE = {
+  category: "other",
+  urgency: "normal",
+  confidence: 0,
+  reason: "LLM kill switch is off — deterministic fallback, no model call.",
 };

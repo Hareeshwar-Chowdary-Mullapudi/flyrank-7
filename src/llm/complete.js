@@ -1,8 +1,18 @@
 import { createLlmClient } from "./client.js";
+import { logLlmCall } from "./costLog.js";
 import { getPromptVersion, loadSystemPrompt } from "./prompt.js";
 import { parseModelJson } from "./parse.js";
 import { quarantineFailure } from "./quarantine.js";
+import {
+  backoffMs,
+  isRetryableError,
+  isTimeoutError,
+  sleep,
+} from "./retry.js";
 import { triageOutputSchema } from "./schema.js";
+
+/** SDK retries are off (maxRetries: 0). We retry ourselves — max 2 extra attempts. */
+const MAX_TRANSPORT_RETRIES = 2;
 
 let client;
 
@@ -11,7 +21,7 @@ function getClient() {
   return client;
 }
 
-async function callModel(messages) {
+async function callModelOnce(messages) {
   const openai = getClient();
   const started = Date.now();
   const res = await openai.chat.completions.create({
@@ -27,6 +37,70 @@ async function callModel(messages) {
     duration_ms: Date.now() - started,
     usage: res.usage ?? null,
   };
+}
+
+/**
+ * Transport-level call with explicit retry policy.
+ * Retries timeouts / 429 / 5xx with backoff+jitter. Never retries 400/401/403.
+ */
+async function callModel(messages, { repairs = 0 } = {}) {
+  let lastErr;
+
+  for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt += 1) {
+    try {
+      const result = await callModelOnce(messages);
+      logLlmCall({
+        prompt_version: result.prompt_version,
+        model: result.model,
+        input_tokens: result.usage?.prompt_tokens,
+        output_tokens: result.usage?.completion_tokens,
+        duration_ms: result.duration_ms,
+        repairs,
+        attempt,
+        ok: true,
+      });
+      return result;
+    } catch (err) {
+      lastErr = err;
+
+      if (!isRetryableError(err) || attempt === MAX_TRANSPORT_RETRIES) {
+        logLlmCall({
+          prompt_version: getPromptVersion(),
+          model: process.env.LLM_MODEL,
+          input_tokens: null,
+          output_tokens: null,
+          duration_ms: null,
+          repairs,
+          attempt,
+          ok: false,
+        });
+
+        if (isTimeoutError(err)) {
+          const timeoutErr = new Error(
+            "Model call timed out after 30s — try again or shorten the input"
+          );
+          timeoutErr.status = 504;
+          throw timeoutErr;
+        }
+
+        throw err;
+      }
+
+      const wait = backoffMs(attempt, err);
+      console.warn(
+        JSON.stringify({
+          type: "llm_retry",
+          attempt,
+          wait_ms: wait,
+          status: err?.status ?? null,
+          message: err?.message ?? String(err),
+        })
+      );
+      await sleep(wait);
+    }
+  }
+
+  throw lastErr;
 }
 
 function validateOutput(value) {
@@ -61,32 +135,35 @@ export async function runTriage(text) {
   const system = loadSystemPrompt();
   const userContent = JSON.stringify({ text });
 
-  const first = await callModel([
-    { role: "system", content: system },
-    { role: "user", content: userContent },
-  ]);
+  const first = await callModel(
+    [
+      { role: "system", content: system },
+      { role: "user", content: userContent },
+    ],
+    { repairs: 0 }
+  );
 
   let attempt = tryParseAndValidate(first.raw);
   let repairs = 0;
 
   if (!attempt.ok) {
     repairs = 1;
-    const repair = await callModel([
-      { role: "system", content: system },
-      { role: "user", content: userContent },
-      {
-        role: "assistant",
-        content: first.raw,
-      },
-      {
-        role: "user",
-        content: [
-          "Your previous answer was rejected for this reason:",
-          attempt.error,
-          "Return only corrected JSON matching the schema. No markdown, no commentary.",
-        ].join("\n"),
-      },
-    ]);
+    const repair = await callModel(
+      [
+        { role: "system", content: system },
+        { role: "user", content: userContent },
+        { role: "assistant", content: first.raw },
+        {
+          role: "user",
+          content: [
+            "Your previous answer was rejected for this reason:",
+            attempt.error,
+            "Return only corrected JSON matching the schema. No markdown, no commentary.",
+          ].join("\n"),
+        },
+      ],
+      { repairs: 1 }
+    );
 
     attempt = tryParseAndValidate(repair.raw);
 
@@ -124,21 +201,5 @@ export async function runTriage(text) {
     prompt_version: first.prompt_version,
     model: first.model,
     repairs,
-  };
-}
-
-/** @deprecated use runTriage — kept for Stage 2 experiments */
-export async function completeTriage(text) {
-  const system = loadSystemPrompt();
-  const result = await callModel([
-    { role: "system", content: system },
-    { role: "user", content: JSON.stringify({ text }) },
-  ]);
-  return {
-    answer: result.raw,
-    prompt_version: result.prompt_version,
-    model: result.model,
-    duration_ms: result.duration_ms,
-    usage: result.usage,
   };
 }
