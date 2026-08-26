@@ -71,6 +71,26 @@ Stage 2 returns `{ answer, prompt_version, model }` — raw model text. Stage 3 
 
 **Provider swap:** only `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` change between OpenRouter and Ollama — the rest of the code stays the same.
 
+## Stage 3 — parse, validate, repair, quarantine
+
+Live responses are never raw model text. Flow:
+
+1. Parse JSON (strip \`\`\` fences / leading prose)
+2. Validate with Zod (`category` / `urgency` enums, `confidence` 0–1)
+3. On failure → **one** repair call with the validation error
+4. Still bad → **422** + append line to `logs/quarantine.jsonl`
+
+Happy path returns only schema-shaped JSON:
+
+```json
+{
+  "category": "billing",
+  "urgency": "high",
+  "confidence": 0.92,
+  "reason": "User reports a duplicate charge on an invoice."
+}
+```
+
 ## Project layout
 
 ```
@@ -86,7 +106,9 @@ A7/
 │       ├── hello.js
 │       ├── client.js
 │       ├── prompt.js     # loads prompts/triage-v1.md
-│       ├── complete.js   # model call
+│       ├── complete.js   # model call + repair loop
+│       ├── parse.js      # strip fences / JSON.parse
+│       ├── quarantine.js # logs/quarantine.jsonl
 │       └── schema.js
 └── package.json
 ```

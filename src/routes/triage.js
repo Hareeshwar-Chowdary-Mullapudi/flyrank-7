@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { completeTriage } from "../llm/complete.js";
+import { runTriage } from "../llm/complete.js";
 import {
   STUB_TRIAGE,
   triageInputSchema,
@@ -30,14 +30,17 @@ router.post("/", async (req, res) => {
   }
 
   try {
-    const result = await completeTriage(parsed.data.text);
-    // Stage 2: return the model text as-is (parse + schema come in Stage 3).
-    return res.status(200).json({
-      answer: result.answer,
-      prompt_version: result.prompt_version,
-      model: result.model,
-    });
+    const result = await runTriage(parsed.data.text);
+    return res.status(200).json(result.data);
   } catch (err) {
+    if (err.status === 422) {
+      return res.status(422).json({
+        error: "Could not produce valid triage JSON",
+        detail: err.message,
+        prompt_version: err.meta?.prompt_version,
+      });
+    }
+
     console.error("triage model error:", err?.message ?? err);
     return res.status(502).json({
       error: "Model call failed",
