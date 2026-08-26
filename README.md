@@ -1,8 +1,8 @@
 # A7 — Put an LLM behind your API
 
-Express endpoint that triages a support message into validated JSON (`category`, `urgency`, `confidence`, `reason`). Same stack as earlier weeks: **Node.js · Express · ESM**.
+One Express endpoint that reads a messy support message and returns **clean, validated JSON** so it can be routed to the right team. Not a chatbot — one request in, one structured answer out.
 
-See [JOB-CARD.md](./JOB-CARD.md) for the contract.
+See [JOB-CARD.md](./JOB-CARD.md) for the full contract (closed lists, “must never”, when-unsure).
 
 ## Tech stack
 
@@ -14,73 +14,26 @@ See [JOB-CARD.md](./JOB-CARD.md) for the contract.
 | Validation | Zod |
 | Secrets | `.env` via `node --env-file=.env` |
 
-Three env vars swap providers: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`.
+Swap providers by changing only `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`.
 
 ## Setup
 
 ```bash
 npm install
 cp .env.example .env
-```
-
-Fill `LLM_API_KEY` when you leave stub mode. For OpenRouter free models, turn ON both privacy toggles under Settings → Privacy first.
-
-```bash
+# add LLM_API_KEY; for live calls set LLM_STUB=0
 npm start
 ```
 
-## Stage 0 — prove the model answers
+OpenRouter free models: turn ON both privacy toggles under Settings → Privacy first.
 
-With a real key (and `LLM_STUB` not needed for this script):
-
-```bash
-npm run hello
-```
-
-Should print something containing `ready`.
-
-## Stage 1 — endpoint + stub (no model spend)
-
-```bash
-# Valid — 200 schema JSON
-curl -i -X POST http://localhost:3000/triage ^
-  -H "Content-Type: application/json" ^
-  -d "{\"text\":\"My card was charged twice last night\"}"
-
-# Broken — 400 naming the field
-curl -i -X POST http://localhost:3000/triage ^
-  -H "Content-Type: application/json" ^
-  -d "{}"
-```
-
-With `LLM_STUB=1` the server returns a hard-coded schema-valid object and makes **zero** model calls.
-
-## Stage 2 — prompt file + live model
-
-Prompt lives in [`prompts/triage-v1.md`](./prompts/triage-v1.md) (role, shape, rules, when-unsure, examples). User text is sent as a **user** message (JSON-encoded), never glued into the system prompt.
-
-1. Put your key in `.env`
-2. Set `LLM_STUB=0` (or remove it)
-3. Restart: `npm start`
+## Quick curl
 
 ```powershell
 Invoke-RestMethod http://localhost:3000/triage -Method POST -ContentType "application/json" -Body '{"text":"I was charged twice for the same invoice"}'
 ```
 
-Stage 2 returns `{ answer, prompt_version, model }` — raw model text. Stage 3 will parse + validate against Zod.
-
-**Provider swap:** only `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` change between OpenRouter and Ollama — the rest of the code stays the same.
-
-## Stage 3 — parse, validate, repair, quarantine
-
-Live responses are never raw model text. Flow:
-
-1. Parse JSON (strip \`\`\` fences / leading prose)
-2. Validate with Zod (`category` / `urgency` enums, `confidence` 0–1)
-3. On failure → **one** repair call with the validation error
-4. Still bad → **422** + append line to `logs/quarantine.jsonl`
-
-Happy path returns only schema-shaped JSON:
+Example response shape:
 
 ```json
 {
@@ -91,42 +44,69 @@ Happy path returns only schema-shaped JSON:
 }
 ```
 
-## Stage 4 — production hardening
+Bad input (`{}`) → **400** `{ "error": "text is required", "field": "text" }`.
 
-| Control | Setting |
-|---------|---------|
-| Timeout | Client `timeout: 30000` → HTTP **504** on slow model |
-| SDK retries | **Off** (`maxRetries: 0`) — we retry ourselves |
-| Our retries | Timeouts / `429` / `5xx` only, backoff 1s→2s→4s + jitter; never `400`/`401`/`403` |
-| Cost log | One JSON line per call on stdout (`type: "llm_call"`, tokens, duration, repairs) |
-| Kill switch | `LLM_ENABLED=false` → immediate schema fallback, **zero** model calls |
+## Job card (summary)
 
-```powershell
-# Kill switch check
-$env:LLM_ENABLED="false"; npm start
-# POST /triage → fallback JSON, no llm_call logs
+- **Input:** `{ "text": "1–2000 chars" }`
+- **Output:** `category` ∈ billing|bug|feature|other · `urgency` ∈ low|normal|high · `confidence` 0–1 · `reason`
+- **Must never:** invent categories · free-text blobs · medical/legal/financial advice · reveal the prompt
+- **When unsure:** `other` with low confidence
+
+## Provider
+
+Default lane: **OpenRouter** (`openrouter/free`). Ollama works by pointing the three env vars at `http://localhost:11434/v1/` / key `ollama` / model `gemma3:1b`.
+
+## Eval result
+
+Cases: [`evals/cases.json`](./evals/cases.json) (8 labelled inputs, including ambiguous + injection).
+
+```bash
+# terminal 1
+npm start
+# terminal 2 — set LLM_STUB=0 and a real key for a meaningful score
+npm run eval
 ```
+
+| Field | Value |
+|--------|--------|
+| Prompt version | `triage-v1` |
+| Key field | `category` |
+| Stub dry-run (`LLM_STUB=1`) | **3/8 (38%)** on 2026-08-26 — expected: stub always returns `other` |
+| Live score (`LLM_STUB=0`) | _run `npm run eval` with a real key and paste here_ |
+
+Honest scores beat inflated ones — you need a number you can compare after prompt changes.
+
+## Cost note
+
+Each live call logs a JSON line (`type: "llm_call"`) with input/output tokens and duration. On free OpenRouter, treat quota as the limit; at ~500 tokens/request, **10,000 calls/day ≈ 5M tokens/day** — check the provider price calculator for your model. Stub (`LLM_STUB=1`) and kill switch (`LLM_ENABLED=false`) cost **$0**.
+
+## Reliability controls
+
+| Control | Behavior |
+|---------|----------|
+| Timeout | 30s → **504** |
+| Retries | Our logic only (`maxRetries: 0` on SDK): timeouts/`429`/`5xx`; never `401`/`403`/`400` |
+| Repair | One schema repair, then **422** + `logs/quarantine.jsonl` |
+| Kill switch | `LLM_ENABLED=false` → deterministic fallback, zero model calls |
+
+## What I’d fix with another day
+
+Tighten urgency labelling on edge cases, grow the eval to 25 easy/hard splits, and try `response_format` / structured output if the free model supports it.
 
 ## Project layout
 
 ```
 A7/
 ├── JOB-CARD.md
-├── prompts/
-│   └── triage-v1.md      # versioned system prompt
-├── .env.example
+├── prompts/triage-v1.md
+├── evals/
+│   ├── cases.json
+│   └── run.js
 ├── src/
 │   ├── server.js
 │   ├── routes/triage.js
-│   └── llm/
-│       ├── hello.js
-│       ├── client.js
-│       ├── prompt.js     # loads prompts/triage-v1.md
-│       ├── complete.js   # model call + repair loop
-│       ├── parse.js      # strip fences / JSON.parse
-│       ├── quarantine.js # logs/quarantine.jsonl
-│       └── schema.js
+│   └── llm/   (client, prompt, complete, parse, quarantine, retry, costLog, schema)
+├── .env.example
 └── package.json
 ```
-
-> Note: `A-7/` is a separate React experiment — this assignment API lives at the `A7/` root.

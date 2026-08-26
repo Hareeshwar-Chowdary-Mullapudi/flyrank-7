@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node --env-file=.env src/server.js",
     "dev": "node --env-file=.env --watch src/server.js",
-    "hello": "node --env-file=.env src/llm/hello.js"
+    "hello": "node --env-file=.env src/llm/hello.js",
+    "eval": "node --env-file=.env evals/run.js"
   },
   "keywords": [
     "llm",
