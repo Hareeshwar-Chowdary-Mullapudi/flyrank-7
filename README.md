@@ -94,6 +94,20 @@ Each live call logs a JSON line (`type: "llm_call"`) with input/output tokens an
 
 Tighten urgency labelling on edge cases, grow the eval to 25 easy/hard splits, and try `response_format` / structured output if the free model supports it.
 
+## AI vs me (bonus rematch)
+
+Quarantined sketch: [`ai-version/`](./ai-version/) (not the submission). Full prompt is in [`ai-version/README.md`](./ai-version/README.md).
+
+| # | Difference |
+|---|------------|
+| 1 | **Timeout / retries** — AI sketch leaves SDK defaults (~10 min timeout, 2 auto-retries). Ours sets `timeout: 30000`, `maxRetries: 0`, and retries only timeouts/`429`/`5xx`. |
+| 2 | **Raw model text** — on parse failure the AI sketch returns `{ raw }`. Ours repairs once, then **422** + quarantine; never returns model prose to the caller. |
+| 3 | **Prompt as code** — AI inlines a short system string. Ours loads versioned `prompts/triage-v1.md` and JSON-encodes user content in the user role. |
+| 4 | **400 shape** — AI often returns a vague `"bad input"`. Ours names the field (`text is required`). |
+| 5 | **Kill switch / stub / cost log** — missing or underspecified in a first AI pass unless the prompt spells them out (ours has all three). |
+
+**What my prompt forgot the first time:** repair-vs-transport retries are different loops — if you only say “retry”, an AI may retry `401`s or skip the schema repair. Rematch lesson: name both policies explicitly.
+
 ## Project layout
 
 ```
